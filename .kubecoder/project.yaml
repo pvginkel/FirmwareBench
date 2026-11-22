@@ -1,0 +1,28 @@
+# The bench's curated entry points: https://kubecoder.home/help/reference/project-yaml/
+#
+# One component: the server, the page and the tests share one package.json, one lockfile and
+# one vitest config. Every verb runs in the `frontend` toolchain (Node 24), where node_modules is
+# installed; the dev container's own node is not the one the suite targets.
+#
+# kc project is cwd-bound: in an environment that carries this repo beside another, every verb is
+# `cd /work/FirmwareBench && kc project …`.
+#
+# The image is not part of `build:` (the Jenkinsfile builds and pushes it with kaniko2). With
+# imageBuilder, `kaniko --no-push` from the repo root proves the Dockerfile in-env.
+#
+# scripts/e2e-smoke.mjs is not part of `test:`: it drives the built page in headless Chromium,
+# from a Playwright install outside the repo (PLAYWRIGHT_DIR), against a real ESP-IDF build
+# directory (E2E_BUILD_DIR). Its header has the command.
+projects:
+  root:
+    description: >-
+      The bench: a Node server and a Vite page that let an agent flash an ESP32 on the
+      operator's desk and read its serial log.
+    jenkins: FirmwareBench
+    # npm ci, not npm install: the tree is small (about 110 packages), so a clean install from
+    # the lockfile at every pod start costs seconds and never rewrites package-lock.json.
+    setup: cexec frontend npm ci
+    build: cexec frontend npm run build
+    test: cexec frontend npm test
+    # ESLint over the whole repo, then tsc over the server, the page and the tests.
+    lint: cexec frontend npm run lint

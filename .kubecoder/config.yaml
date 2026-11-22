@@ -1,0 +1,25 @@
+# The bench's own environment: https://kubecoder.home/help/reference/config-yaml/
+capabilities:
+  github: rw
+tools:
+  - use: frontend
+# The Dockerfile, proven in-env with `kaniko --no-push` (project.yaml's header).
+imageBuilder: true
+ports:
+  # The page, the holder's WebSocket and the job images. Web Serial needs a secure context, so
+  # the operator's browser reaches the page over https, terminated at the edge.
+  - name: bench
+    port: 3520
+    type: http
+    sslOffload: true
+preamble:
+  instructions: |
+    The bench: a Node server and a Vite page, built, tested and run in the
+    `frontend` toolchain. Use `kc project setup|build|test|lint` from
+    /work/FirmwareBench; by hand, prefix npm with `cexec frontend`.
+    Run it as a dev process, after a build, with:
+      cexec frontend node /work/FirmwareBench/dist/node/server/main.js
+    The page is on the `bench` port's URL (kc env describe), which the
+    operator opens once; the agent API is on 127.0.0.1:3521, the log at
+    /work/.bench/serial.log. scripts/e2e-smoke.mjs starts a second server
+    on 3530/3531, so it runs beside a bench the operator's board is on.
