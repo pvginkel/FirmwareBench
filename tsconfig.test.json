@@ -4,7 +4,7 @@
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "lib": ["ES2023", "DOM"],
-    "types": ["node", "w3c-web-serial"],
+    "types": ["node"],
     "noEmit": true
   },
   "include": ["test", "src"]
