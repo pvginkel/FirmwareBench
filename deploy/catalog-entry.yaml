@@ -1,0 +1,134 @@
+# The `bench` catalog service. Paste everything from `bench:` down, as it is, into
+# KubeCoderDeploy's chart/values.yaml under `controllerConfig.services`, after `pilot-sync`; it is
+# indented for that place. Both stages run the same image, so config/<stage>/values.yaml gets
+# nothing. The image floats on `latest`: Jenkins job FirmwareBench pushes it from main, and every
+# environment start resolves it to a digest, so a new build needs no commit in KubeCoderDeploy.
+    bench:
+      # The firmware bench (pvginkel/FirmwareBench): a Node server that flashes the ESP32 on the
+      # operator's desk and records its serial log, through a page in the operator's Chrome that
+      # holds the USB port over Web Serial. The page, its WebSocket and the job images are on 3520,
+      # which the selecting repo publishes with its own `ports:` entry: only that form has
+      # sslOffload, and Web Serial needs https. The agent API is on 127.0.0.1:3521 and is never
+      # published. No `ports` here, as for pilot-sync: the repo's entry types the page port. The
+      # server's defaults (3520, 3521, /work, /work/.bench) need no env.
+      # The image floats on the tracking `latest` tag, which every env start composes by digest
+      # (D274), so a rebuilt image reaches an environment at its next start.
+      description: >-
+        bench — flash the ESP32 on the operator's desk and read its serial log.
+      instructions: |-
+        The bench: flash the ESP32 on the operator's desk and read its serial
+        log. A page in the operator's Chrome holds the USB port; you call the
+        API on http://127.0.0.1:3521 from any container in this pod.
+
+        Setup, once per repo. In .kubecoder/config.yaml, select the service
+        by its bare name, without expose:, and add the port entry, both as
+        they are here; then run kc env restart. The sidecar listens on 3520,
+        and the name makes the page's URL:
+          services:
+            - bench
+          ports:
+            - name: bench
+              port: 3520
+              type: http
+              sslOffload: true
+        The operator then opens https://bench.<env-id>.home in Chrome
+        (<env-id> is $KUBECODER_ENVIRONMENT_ID) and clicks "Choose port",
+        once. Reloads, resets and replugs reconnect with no click, the tab
+        may stay hidden, and a second tab is turned away. When /status shows
+        no holder connected, ask the operator to open the page.
+
+        The loop: build with idf.py, flash, wait for the boot.
+          curl -s --fail-with-body http://127.0.0.1:3521/flash \
+            -d '{"build_dir": "/work/<repo>/build"}'
+          curl -s --fail-with-body -G http://127.0.0.1:3521/log \
+            -d since=<cursor> --data-urlencode 'wait=Calling app_main'
+
+        The calls. Each blocks until it is done. Bodies are JSON, whatever
+        the content type. A failure is a non-2xx status with {"error":
+        <code>, "message": ...}; --fail-with-body makes curl exit 22 on it
+        and still print the body.
+        POST /flash {"build_dir": <absolute path>, "timeout": <s, 120>}
+          Writes the build, resets the device, waits for the port to return.
+          -> {"chip": "ESP32-S3", "mac": "98:3d:ae:..", "seconds": 3.7,
+              "cursor": 145}; the cursor is the flash's start marker, so
+              the first boot is after it.
+        GET /status
+          curl -s --fail-with-body http://127.0.0.1:3521/status
+          -> holder.connected; port.open and port.state (open, lost,
+             closed, none); port.chip and port.mac, once a flash has met
+             the chip; job, the running one or null; log.cursor.
+        GET /log ?since=<cursor> &wait=<regex> &timeout=<s> &limit=<n>
+          curl -s --fail-with-body 'http://127.0.0.1:3521/log?since=145'
+          Without wait: the lines after since, or the last ones without
+          it, at most limit (500, at most 5000). "truncated": true means
+          lines after since have left memory: read the file for them.
+          With wait: blocks until a device line after since (after now,
+          without since) matches the JavaScript regex; the bench's markers
+          never match. timeout is 30 s by default, at most 600. URL-encode
+          the regex (curl -G --data-urlencode). -> {"lines", "match",
+          "cursor"}, the lines up to the match; on a time-out, 504
+          timed_out with the lines seen. A line is {"cursor", "time",
+          "text"}, with "marker": true on a marker.
+        POST /reset
+          curl -s --fail-with-body -X POST http://127.0.0.1:3521/reset
+          A hard reset into the firmware; it waits for the port to return.
+          -> {"cursor": <the reset marker>}
+        POST /console {"line": <one line, no CR or LF>}
+          curl -s --fail-with-body http://127.0.0.1:3521/console \
+            -d '{"line": "help"}'
+          Writes the line and a line end. -> {"cursor": <its marker>}; the
+          reply is in /log after it.
+
+        Error codes:
+          no_holder      503  the page is not open
+          port_not_open  503  no port chosen, or the device is unplugged;
+                              a lost port gets 10 s to return first
+          busy           409  a job is running; one that timed out holds
+                              the bench until the page answers, up to 60 s
+          bad_build_dir  400  not under /work, no flasher_args.json, or an
+                              image missing
+          wrong_chip     422  the device is another chip; nothing written
+          flash_failed   502  the message is esptool's own
+          reset_failed   502  the reset did not complete
+          console_failed 502  the line was not written
+          timed_out      504  the job or the wait ran out of time
+          bad_request    400, not_found 404: a malformed call
+        A failed job's body also carries the cursor of its start marker.
+
+        The log: /work/.bench/serial.log, rotated at 4 MB into .1 to .3.
+          2026-11-22T17:20:06.153Z 145 = flash started: /work/app/build ...
+          2026-11-22T17:20:09.738Z 214 | I (262) main_task: Calling app_main()
+        UTC time, cursor, then | for a line the device printed or = for a
+        marker the bench wrote: flash started and done, reset, console,
+        port lost and reopened, holder connected. Colour codes are stripped.
+        The cursor only grows, across rotations and restarts.
+
+        Safety. Only the images flasher_args.json names are written, each at
+        its own offset and MD5-checked. The flash is never erased whole, so
+        nvs and the other data partitions survive a flash. The chip is
+        checked before anything is written. build_dir and its images must be
+        under /work. The API listens on 127.0.0.1 only, so only this pod's
+        containers can flash; the page port starts no job.
+
+        Decode a backtrace in the esp-idf toolchain, against the ELF of the
+        build that ran. Pass the Backtrace: line's PC:SP pairs as they are;
+        the sed drops the IDF banner cexec prints first:
+          cexec esp-idf xtensa-esp32s3-elf-addr2line -pfiaC \
+            -e build/<project>.elf 0x42009358:0x3fc9a0f0 \
+            0x4037fba4:0x3fc9a110 2>/dev/null | sed -n '/^0x/,$p'
+          -> 0x42009358: app_main at /work/<repo>/main/main.c:15
+        For esp32 the tool is xtensa-esp32-elf-addr2line, for the RISC-V
+        chips (esp32c3, c6, h2) riscv32-esp-elf-addr2line.
+      container:
+        image: registry:5000/firmware-bench:latest
+        # No securityContext: the pod's uid runs it, so the log it writes under /work/.bench is the
+        # agent's to read, where a root sidecar would leave it root-owned.
+        # No memory request — the pod composer books it at 0 (D124) so capacity is governed
+        # solely by the env count cap; the limit still caps usage. Measured 2026-11-22 on the real
+        # board: 74 MiB peak RSS (VmHWM), 22 MiB of it anonymous, after a flash, a reset and 5,400
+        # log lines; the limit leaves 1.7x of that.
+        resources:
+          limits: { memory: 128Mi }
+      # The build directories it flashes are under /work, and so is its log.
+      mountWork: true
+      # No dataPath: the log lives under /work, which survives a restart.
