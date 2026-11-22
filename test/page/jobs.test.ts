@@ -4,7 +4,8 @@
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FlashImage, Job } from '../../src/shared/protocol.ts';
-import { BRIDGE_INFO, fakeEsptool, imageFetch, started as start, tick, until, type FakeEsptool, type Started } from './fakes.ts';
+import type { SerialPortLike } from '../../src/page/serial.ts';
+import { BRIDGE_INFO, fakeEsptool, imageFetch, started as start, tick, until, type FakeEsptool, type FakePort, type Started } from './fakes.ts';
 
 let h: Started;
 
@@ -92,14 +93,38 @@ describe('a flash', () => {
     await tick(500);
 
     expect(h.server.logText()).toBe(boot.join(''));
-    // The first of it reached the log through esptool-js's buffer
-    expect(new TextDecoder().decode(esptool.released[0])).toBe(boot[0]);
+    // What came while RTS was held reached the log through esptool-js's buffer
+    expect(new TextDecoder().decode(esptool.released[0])).toBe(boot.slice(0, 3).join(''));
     // The port was never closed after the reset
     const opens = h.port.opens;
     h.port.push('later\n');
     await tick(5);
     expect(h.port.opens).toBe(opens);
     expect(h.server.logText().endsWith('Hello world!\r\nlater\n')).toBe(true);
+  });
+
+  it('drops what the stub sent until the port is quiet, then keeps the boot from the ROM banner on', async () => {
+    await h.engine.stop();
+    // The stub's last replies still on their way when writing ends, 10 to 15 ms apart
+    const stub = (port: SerialPortLike) => {
+      const fake = port as FakePort;
+      fake.push('\xc0stub reply 1\xc0');
+      setTimeout(() => fake.push('\xc0stub reply 2\xc0'), 10);
+      setTimeout(() => fake.push('\xc0stub reply 3\xc0'), 25);
+    };
+    esptool = fakeEsptool({ afterWrite: stub });
+    h = await start({ connectEsptool: esptool.connect, fetch: served('j1') });
+    const boot = ['ESP-ROM:esp32s3-20210327\r\n', 'rst:0x15 (USB_UART_CHIP_RESET),boot:0x8 (SPI_FAST_FLASH_BOOT)\r\n', 'Hello world!\r\n'];
+    h.port.onReset = () => {
+      h.port.push(boot[0]!);
+      setTimeout(() => h.port.push(boot[1]!), 5);
+      setTimeout(() => h.port.push(boot[2]!), 300);
+    };
+
+    expect(await run('j1', flashJob('j1'))).toMatchObject({ ok: true });
+    await tick(500);
+
+    expect(h.server.logText()).toBe(boot.join(''));
   });
 
   it('stays at 115200 on the chip\'s own USB: esptool-js never closes and reopens the port', async () => {

@@ -32,8 +32,13 @@ export class FakePort implements SerialPortLike {
   readonly signals: (PortSignals & { at: number })[] = [];
   /** What the host wrote, as text. */
   written = '';
-  /** The chip resets when RTS falls. */
+  /**
+   * The chip resets, and boots on. The S3's own USB resets it as RTS is asserted, and it
+   * boots while RTS is still held; a bridge's EN/IO0 circuit holds it in reset while RTS is
+   * asserted, and it boots as RTS is released.
+   */
   onReset: (() => void) | null = null;
+  readonly resetOn: 'assert' | 'release';
   private readonly info: PortInfo;
   private stream: ReadableStream<Uint8Array> | null = null;
   private controller: ReadableStreamDefaultController<Uint8Array> | null = null;
@@ -42,6 +47,7 @@ export class FakePort implements SerialPortLike {
 
   constructor(info: PortInfo = S3_INFO) {
     this.info = info;
+    this.resetOn = info.usbVendorId === S3_INFO.usbVendorId ? 'assert' : 'release';
   }
 
   getInfo(): PortInfo {
@@ -101,10 +107,13 @@ export class FakePort implements SerialPortLike {
   async setSignals(signals: PortSignals): Promise<void> {
     if (!this.isOpen || this.stale) throw new DOMException('The port is closed.', 'InvalidStateError');
     this.signals.push({ ...signals, at: Date.now() });
-    if (signals.requestToSend === true) this.rts = true;
+    if (signals.requestToSend === true && !this.rts) {
+      this.rts = true;
+      if (this.resetOn === 'assert') this.onReset?.();
+    }
     if (signals.requestToSend === false && this.rts) {
       this.rts = false;
-      this.onReset?.();
+      if (this.resetOn === 'release') this.onReset?.();
     }
   }
 
@@ -281,9 +290,17 @@ export interface FakeEsptool {
  * esptool-js with the real Transport over the fake port, and a fake chip behind it.
  * connect() does what ESPLoader.main() does to the port: open at the ROM rate, start the
  * read loop, then, when the flash rate is another, the baud change, which closes and reopens
- * it. `before` runs first in each connect, to make one fail.
+ * it. `before` runs first in each connect, to make one fail; `afterWrite` runs as each
+ * writeFlash() ends.
  */
-export function fakeEsptool(opts: { chip?: string; mac?: string; before?: (port: SerialPortLike, mode: ConnectMode, n: number) => void } = {}): FakeEsptool {
+export function fakeEsptool(
+  opts: {
+    chip?: string;
+    mac?: string;
+    before?: (port: SerialPortLike, mode: ConnectMode, n: number) => void;
+    afterWrite?: (port: SerialPortLike) => void;
+  } = {},
+): FakeEsptool {
   const writes: FlashOptions[] = [];
   const writeBauds: number[] = [];
   const released: Uint8Array[] = [];
@@ -304,6 +321,7 @@ export function fakeEsptool(opts: { chip?: string; mac?: string; before?: (port:
           o.reportProgress?.(i, 0, f.data.length);
           o.reportProgress?.(i, f.data.length, f.data.length);
         });
+        opts.afterWrite?.(port);
       },
     };
     const session: EspSession = new EsptoolSession(transport, loader, opts.chip ?? 'ESP32-S3', opts.mac ?? 'aa:bb:cc:dd:ee:ff');

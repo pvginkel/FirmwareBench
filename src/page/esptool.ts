@@ -4,13 +4,21 @@
 import { ESPLoader, Transport } from 'esptool-js';
 import type { Before, FlashFreqValues, FlashModeValues, FlashOptions, FlashSizeValues, IEspLoaderTerminal } from 'esptool-js';
 import { md5hex } from './md5.ts';
-import { MONITOR_BAUD, pulseRts, type Clock, type SerialPortLike } from './serial.ts';
+import { MONITOR_BAUD, pulseRts, sleep, type Clock, type SerialPortLike } from './serial.ts';
 
 export const ROM_BAUD = 115200;
 /** Behind a UART bridge. */
 export const FLASH_BAUD = 460800;
 /** USB vendor of the chip's own USB: USB-Serial-JTAG, or USB-OTG. */
 export const ESPRESSIF_VID = 0x303a;
+/** Before the reset on the chip's own USB: how long the port has to be quiet, and the longest wait for it. */
+export const DRAIN_QUIET_MS = 20;
+export const DRAIN_MAX_MS = 300;
+
+/** The port is the chip's own USB, not a UART bridge. */
+export function nativeUsb(port: SerialPortLike): boolean {
+  return port.getInfo().usbVendorId === ESPRESSIF_VID;
+}
 
 /**
  * The rate to flash at. The chip's own USB ignores the rate, and esptool-js changes it by
@@ -18,7 +26,7 @@ export const ESPRESSIF_VID = 0x303a;
  * flash stays at the ROM's rate, and esptool-js changes nothing.
  */
 export function flashBaud(port: SerialPortLike): number {
-  return port.getInfo().usbVendorId === ESPRESSIF_VID ? ROM_BAUD : FLASH_BAUD;
+  return nativeUsb(port) ? ROM_BAUD : FLASH_BAUD;
 }
 
 export type ConnectMode = Before;
@@ -72,11 +80,13 @@ interface TransportInternals {
 
 /** esptool-js's Transport over a port, with the handover the bench needs. */
 export class TransportHandle {
+  readonly port: SerialPortLike;
   readonly raw: Transport;
   private loop: Promise<void> = Promise.resolve();
   private released = false;
 
   constructor(port: SerialPortLike) {
+    this.port = port;
     this.raw = new Transport(port as unknown as ConstructorParameters<typeof Transport>[0], false);
     // Keep each read loop esptool-js starts (on connect, and again on a baud change), so
     // release() can wait for the last one to end
@@ -142,15 +152,26 @@ export class EsptoolSession implements EspSession {
     });
   }
 
+  /**
+   * Nothing read before the reset is the first boot: not what the stub sent, and not a boot
+   * a reopen may start. flushInput() only drops what the read loop has taken in, so when to
+   * call it depends on when the chip boots:
+   * - the chip's own USB resets it as RTS is asserted, and it boots while RTS is still held.
+   *   What the stub sent is drained first, until the port is quiet;
+   * - a bridge's EN/IO0 circuit holds the chip in reset while RTS is asserted, and it boots
+   *   as RTS is released. The buffer is emptied just before the release, when the read loop
+   *   has had the pulse's 100 ms to take in everything sent before the reset, a boot the
+   *   reopen at the monitor's rate started included.
+   */
   async hardReset(clock: Clock): Promise<void> {
     const raw = this.transport.raw;
-    // Behind a UART bridge the boot has to be read at the firmware's rate
+    if (nativeUsb(this.transport.port)) {
+      await drainInput(raw, clock);
+      await pulseRts((on) => raw.setRTS(on), clock);
+      return;
+    }
+    // The boot has to be read at the firmware's rate
     if (raw.baudrate !== MONITOR_BAUD) await raw.changeBaudrate(MONITOR_BAUD);
-    // Nothing read before the chip comes out of reset is the first boot: not what the stub
-    // sent, and not a boot the reopen above may start. flushInput() only drops what the read
-    // loop has taken in, and such a boot is still queued in the new stream when the loop
-    // starts. So the buffer is emptied at the end of the pulse, when the loop has had its
-    // 100 ms to take in everything sent before it
     await pulseRts((on) => raw.setRTS(on), clock, () => raw.flushInput());
   }
 
@@ -161,6 +182,21 @@ export class EsptoolSession implements EspSession {
   disconnect(): Promise<void> {
     return this.transport.disconnect();
   }
+}
+
+/**
+ * Waits until the read loop has taken in nothing for `DRAIN_QUIET_MS`, or `DRAIN_MAX_MS`
+ * have passed, and drops what it took in. esptool-js's own drainInput() waits 100 ms of
+ * quiet, on the wall clock.
+ */
+async function drainInput(raw: Transport, clock: Clock): Promise<void> {
+  const deadline = clock.now() + DRAIN_MAX_MS;
+  let seen = -1;
+  while (raw.inWaiting() !== seen && clock.now() < deadline) {
+    seen = raw.inWaiting();
+    await sleep(clock, DRAIN_QUIET_MS);
+  }
+  raw.flushInput();
 }
 
 export const connectEsptool: ConnectEsptool = async (port, mode, terminal) => {
