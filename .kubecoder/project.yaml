@@ -19,7 +19,7 @@ projects:
       The bench: a Node server and a Vite page that let an agent flash an ESP32 on the
       operator's desk and read its serial log.
     jenkins: FirmwareBench
-    # npm ci, not npm install: the tree is small (about 110 packages), so a clean install from
+    # npm ci, not npm install: the tree is small (135 packages), so a clean install from
     # the lockfile at every pod start costs seconds and never rewrites package-lock.json.
     setup: cexec frontend npm ci
     build: cexec frontend npm run build
