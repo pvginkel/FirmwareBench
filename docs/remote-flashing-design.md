@@ -450,7 +450,9 @@ Taken on 2026-11-22. D7 is the firmware's and stays open.
 - **D2. Packaging.** A catalog service, one per environment, in a repo of its own (§5).
 - **D3. Build handover.** By path through `mountWork`. No upload.
 - **D4. Agent interface.** curl against the localhost API, documented in the catalog entry's
-  `instructions`. No CLI.
+  `instructions`. No CLI. Changed after the build (2026-11-22): the manual is the
+  `kubecoder:bench` skill, so that firmware work finds the bench even where the service is not yet
+  selected, and the `instructions` point at it.
 - **D5. Page-to-server transport.** One WebSocket, with a ping inside the edge's idle timeout.
 - **D6. Log retention.** `/work/.bench/serial.log`, rotated by size, a few files of a few MB.
   - It is under `/work`, so the agent reads it directly and it survives a restart. `dataPath` is

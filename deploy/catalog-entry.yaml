@@ -14,116 +14,15 @@
       # The image floats on the tracking `latest` tag, which every env start composes by digest
       # (D274), so a rebuilt image reaches an environment at its next start.
       description: >-
-        bench — flash the ESP32 on the operator's desk and read its serial log.
+        bench — flash and debug the ESP32 on the operator's desk; what replaces idf.py flash and monitor in a pod.
       instructions: |-
         The bench: flash the ESP32 on the operator's desk and read its serial
-        log. A page in the operator's Chrome holds the USB port; you call the
-        API on http://127.0.0.1:3521 from any container in this pod.
-
-        Setup, once per repo. In .kubecoder/config.yaml, select the service
-        by its bare name, without expose:, and add the port entry, both as
-        they are here; then run kc env restart. The sidecar listens on 3520,
-        and the name makes the page's URL:
-          services:
-            - bench
-          ports:
-            - name: bench
-              port: 3520
-              type: http
-              sslOffload: true
-        The operator then opens https://bench.<env-id>.home in Chrome
-        (<env-id> is $KUBECODER_ENVIRONMENT_ID) and clicks "Choose port",
-        once. Reloads, resets and replugs reconnect with no click, the tab
-        may stay hidden, and a second tab is turned away. When /status shows
-        no holder connected, ask the operator to open the page.
-
-        The loop: build with idf.py, flash, wait for the boot.
-          curl -s --fail-with-body http://127.0.0.1:3521/flash \
-            -d '{"build_dir": "/work/<repo>/build"}'
-          curl -s --fail-with-body -G http://127.0.0.1:3521/log \
-            -d since=<cursor> --data-urlencode 'wait=Calling app_main'
-        Always wait from the cursor the flash, reset or console call
-        answered: since=0 matches lines of boots long gone.
-
-        The calls. Each blocks until it is done. Bodies are JSON, whatever
-        the content type. A failure is a non-2xx status with {"error":
-        <code>, "message": ...}; --fail-with-body makes curl exit 22 on it
-        and still print the body.
-        POST /flash {"build_dir": <absolute path>, "timeout": <s, 120>}
-          Writes the build, resets the device, waits for the port to return.
-          -> {"chip": "ESP32-S3", "mac": "98:3d:ae:..", "seconds": 3.7,
-              "cursor": 145}; the cursor is the flash's start marker, so
-              the first boot is after it.
-        GET /status
-          curl -s --fail-with-body http://127.0.0.1:3521/status
-          -> holder.connected; port.open and port.state (open, lost,
-             closed, none); port.chip and port.mac, once a flash has met
-             the chip; job, the running one or null; log.cursor.
-        GET /log ?since=<cursor> &wait=<regex> &timeout=<s> &limit=<n>
-          curl -s --fail-with-body 'http://127.0.0.1:3521/log?since=145'
-          Without wait: the lines after since, or the last ones without
-          it, at most limit (500, at most 5000). "truncated": true means
-          lines after since have left memory: read the file for them.
-          With wait: blocks until a device line after since (after now,
-          without since) matches the JavaScript regex; the bench's markers
-          never match. timeout is 30 s by default, at most 600. URL-encode
-          the regex (curl -G --data-urlencode). -> {"lines", "match",
-          "cursor"}, the lines up to the match; on a time-out, 504
-          timed_out with the lines seen. A line is {"cursor", "time",
-          "text"}, with "marker": true on a marker.
-        POST /reset
-          curl -s --fail-with-body -X POST http://127.0.0.1:3521/reset
-          A hard reset into the firmware; it waits for the port to return.
-          -> {"cursor": <the reset marker>}
-        POST /console {"line": <one line, no CR or LF>}
-          curl -s --fail-with-body http://127.0.0.1:3521/console \
-            -d '{"line": "help"}'
-          Writes the line and a line end. -> {"cursor": <its marker>}; the
-          reply is in /log after it. Wait for the console's prompt (for
-          ESP-IDF's console, 'wait=esp32s3> ') to know the answer is done.
-
-        Error codes:
-          no_holder      503  the page is not open
-          port_not_open  503  no port chosen, or the device is unplugged;
-                              a lost port gets 10 s to return first
-          busy           409  a job is running; one that timed out holds
-                              the bench until the page answers, up to 60 s
-          bad_build_dir  400  not under /work, no flasher_args.json, or an
-                              image missing
-          wrong_chip     422  the device is another chip; nothing written
-          flash_failed   502  the message is esptool's own
-          reset_failed   502  the reset did not complete
-          console_failed 502  the line was not written
-          timed_out      504  the job or the wait ran out of time
-          bad_request    400, not_found 404: a malformed call
-        A failed job's body also carries the cursor of its start marker.
-
-        The log: /work/.bench/serial.log, rotated at 4 MB into .1 to .3.
-          2026-11-22T17:20:06.153Z 145 = flash started: /work/app/build ...
-          2026-11-22T17:20:09.738Z 214 | I (262) main_task: Calling app_main()
-        UTC time, cursor, then | for a line the device printed or = for a
-        marker the bench wrote: flash started and done, reset, console,
-        port lost and reopened, holder connected. Colour codes are stripped.
-        The cursor only grows, across rotations and restarts.
-
-        Safety. Only the images flasher_args.json names are written, each at
-        its own offset and MD5-checked. The flash is never erased whole, so
-        nvs and the other data partitions survive a flash. The chip is
-        checked before anything is written. build_dir and its images must be
-        under /work. The API listens on 127.0.0.1 only, so only this pod's
-        containers can flash; the page port starts no job.
-
-        Decode a backtrace in the esp-idf toolchain, against the ELF of the
-        build that ran (build/<name>.elf, named after the project() in its
-        CMakeLists.txt: ls build/*.elf). Pass the Backtrace: line's PC:SP
-        pairs as they are;
-        the sed drops the IDF banner cexec prints first:
-          cexec esp-idf xtensa-esp32s3-elf-addr2line -pfiaC \
-            -e build/<project>.elf 0x42009358:0x3fc9a0f0 \
-            0x4037fba4:0x3fc9a110 2>/dev/null | sed -n '/^0x/,$p'
-          -> 0x42009358: app_main at /work/<repo>/main/main.c:15
-        For esp32 the tool is xtensa-esp32-elf-addr2line, for the RISC-V
-        chips (esp32c3, c6, h2) riscv32-esp-elf-addr2line.
+        log. Its manual, the API calls, error codes and log format included, is
+        the kubecoder:bench skill: load it before you flash. The API is on
+        http://127.0.0.1:3521 from any container in this pod, the log at
+        /work/.bench/serial.log, and the operator's page at
+        https://bench.<env-id>.home (<env-id> is $KUBECODER_ENVIRONMENT_ID).
+        When GET /status shows no holder connected, ask the operator to open it.
       container:
         image: registry:5000/firmware-bench:latest
         # No securityContext: the pod's uid runs it, so the log it writes under /work/.bench is the

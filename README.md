@@ -46,9 +46,10 @@ supervised and dies on a pod restart.
 
 The agent API has five calls: `POST /flash`, `GET /status`, `GET /log`, `POST /reset` and
 `POST /console`. Every failure is a non-2xx status with a JSON body that carries an error code.
-The reference for the calls, their answers, the error codes and the log format is the
-`instructions` text in `deploy/catalog-entry.yaml`, which is what agents read through
-`kc env describe`.
+The reference for the calls, their answers, the error codes, the log format and how the board
+behaves is the `kubecoder:bench` skill in `pvginkel/KubeCoderConfig`
+(`kubecoder/skills/bench/SKILL.md`). The catalog entry's `instructions` only point at it. A change
+to the API or to the board's behaviour changes that skill too.
 
 ## Tests
 
