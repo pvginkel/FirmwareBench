@@ -42,6 +42,8 @@
             -d '{"build_dir": "/work/<repo>/build"}'
           curl -s --fail-with-body -G http://127.0.0.1:3521/log \
             -d since=<cursor> --data-urlencode 'wait=Calling app_main'
+        Always wait from the cursor the flash, reset or console call
+        answered: since=0 matches lines of boots long gone.
 
         The calls. Each blocks until it is done. Bodies are JSON, whatever
         the content type. A failure is a non-2xx status with {"error":
@@ -77,7 +79,8 @@
           curl -s --fail-with-body http://127.0.0.1:3521/console \
             -d '{"line": "help"}'
           Writes the line and a line end. -> {"cursor": <its marker>}; the
-          reply is in /log after it.
+          reply is in /log after it. Wait for the console's prompt (for
+          ESP-IDF's console, 'wait=esp32s3> ') to know the answer is done.
 
         Error codes:
           no_holder      503  the page is not open
@@ -111,7 +114,9 @@
         containers can flash; the page port starts no job.
 
         Decode a backtrace in the esp-idf toolchain, against the ELF of the
-        build that ran. Pass the Backtrace: line's PC:SP pairs as they are;
+        build that ran (build/<name>.elf, named after the project() in its
+        CMakeLists.txt: ls build/*.elf). Pass the Backtrace: line's PC:SP
+        pairs as they are;
         the sed drops the IDF banner cexec prints first:
           cexec esp-idf xtensa-esp32s3-elf-addr2line -pfiaC \
             -e build/<project>.elf 0x42009358:0x3fc9a0f0 \
