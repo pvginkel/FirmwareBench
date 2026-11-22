@@ -28,6 +28,8 @@ export interface BenchOptions {
   /** 0 takes an ephemeral port. The API always binds to 127.0.0.1. */
   apiPort?: number;
   pageDir: string;
+  /** Origins a holder may connect from besides the page's own, such as Vite's dev server. */
+  allowedOrigins?: string[];
   /** Build directories must be under this. */
   workRoot: string;
   /** Where `serial.log` and its rotations go. */
@@ -51,7 +53,7 @@ export async function startBench(opts: BenchOptions): Promise<Bench> {
   const log = new SerialLog({ ...opts.log, dir: opts.logDir });
   log.open();
   const hub = new HolderHub({ ...opts.hub, log });
-  const page = createPageServer({ hub, pageDir: opts.pageDir });
+  const page = createPageServer({ hub, pageDir: opts.pageDir, allowedOrigins: opts.allowedOrigins });
   const api = http.createServer(
     agentApi(hub, log, {
       workRoot: opts.workRoot,

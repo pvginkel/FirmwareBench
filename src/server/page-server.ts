@@ -13,6 +13,8 @@ export interface PageServerOptions {
   hub: HolderHub;
   /** Vite's output: `index.html`, and hashed files under `assets/`. */
   pageDir: string;
+  /** Origins a holder may connect from besides the page's own, such as Vite's dev server. */
+  allowedOrigins?: string[];
 }
 
 export interface PageServer {
@@ -39,6 +41,7 @@ const IMAGE_PATH = /^\/jobs\/([^/]+)\/images\/(\d{1,6})$/;
 
 export function createPageServer(opts: PageServerOptions): PageServer {
   const root = path.resolve(opts.pageDir);
+  const allowed = new Set((opts.allowedOrigins ?? []).map(normalOrigin).filter((o): o is string => o !== null));
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
 
   const server = http.createServer((req, res) => {
@@ -112,6 +115,11 @@ export function createPageServer(opts: PageServerOptions): PageServer {
       socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
       return;
     }
+    // Only the bench's own page holds the port: no other site open in the operator's browser
+    if (!originAllowed(req, allowed)) {
+      socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+      return;
+    }
     wss.handleUpgrade(req, socket, head, (ws) => opts.hub.accept(ws, clientAddress(req)));
   });
 
@@ -139,6 +147,30 @@ function pathOf(url: string | undefined): string | null {
   }
   if (!p.startsWith('/') || p.includes('\0') || p.includes('\\')) return null;
   return p;
+}
+
+/**
+ * An upgrade is the page's own when its Origin's host is the host it was sent to: the edge's
+ * X-Forwarded-Host when there is one, else Host. A missing Origin is refused.
+ */
+function originAllowed(req: http.IncomingMessage, allowed: ReadonlySet<string>): boolean {
+  const origin = normalOrigin(req.headers.origin);
+  if (!origin) return false;
+  if (allowed.has(origin)) return true;
+  const fwd = req.headers['x-forwarded-host'];
+  const host = ((Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0]?.trim() || req.headers.host || '').toLowerCase();
+  return host !== '' && new URL(origin).host === host;
+}
+
+/** `scheme://host[:port]` as URL gives it, lower case and without a default port, or null. */
+function normalOrigin(o: string | undefined): string | null {
+  if (!o) return null;
+  try {
+    const u = new URL(o.trim());
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.origin : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The edge is nginx, which says who connected in X-Forwarded-For. */

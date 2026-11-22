@@ -3,6 +3,7 @@
 //   BENCH_PAGE_PORT  the page, the holder's WebSocket and the images, on 0.0.0.0 (3520)
 //   BENCH_API_PORT   the agent API, on 127.0.0.1 only (3521)
 //   BENCH_PAGE_DIR   the built page (dist/page)
+//   BENCH_ALLOWED_ORIGINS  origins a holder may connect from besides the page's own, comma-separated
 //   BENCH_WORK_ROOT  build directories must be under this (/work)
 //   BENCH_LOG_DIR    where serial.log goes (/work/.bench)
 //
@@ -40,6 +41,10 @@ async function main(): Promise<void> {
     pagePort: port('BENCH_PAGE_PORT', DEFAULTS.pagePort),
     apiPort: port('BENCH_API_PORT', DEFAULTS.apiPort),
     pageDir: dir('BENCH_PAGE_DIR', path.join(packageRoot(), 'dist', 'page')),
+    allowedOrigins: (process.env.BENCH_ALLOWED_ORIGINS ?? '')
+      .split(',')
+      .map((o) => o.trim())
+      .filter(Boolean),
     workRoot: dir('BENCH_WORK_ROOT', '/work'),
     logDir: dir('BENCH_LOG_DIR', '/work/.bench'),
   });

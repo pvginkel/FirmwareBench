@@ -6,7 +6,7 @@ import path from 'node:path';
 import { WebSocket } from 'ws';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HOLDER_PATH } from '../../src/shared/protocol.ts';
-import { ASSET_JS, INDEX_HTML, startTestBench, type TestBench } from './helpers.ts';
+import { ASSET_JS, INDEX_HTML, logFileLines, ScriptedHolder, startTestBench, type TestBench } from './helpers.ts';
 
 let bench: TestBench;
 
@@ -120,5 +120,56 @@ describe('WebSocket upgrades', () => {
       });
       expect([p, status]).toEqual([p, 404]);
     }
+  });
+});
+
+/** The status a holder upgrade gets: 101 when it is taken. */
+function upgrade(b: TestBench, opts: { origin?: string; headers?: Record<string, string> } = {}): Promise<number> {
+  return new Promise((resolve) => {
+    const ws = new WebSocket(b.holderUrl(), opts);
+    ws.on('unexpected-response', (_req, res) => {
+      resolve(res.statusCode ?? 0);
+      ws.terminate();
+    });
+    ws.on('open', () => {
+      resolve(101);
+      ws.terminate();
+    });
+    ws.on('error', () => resolve(-1));
+  });
+}
+
+describe('the Origin check on the holder upgrade', () => {
+  it('refuses a foreign Origin and a missing one with 403, and writes no marker', async () => {
+    const before = logFileLines(bench);
+    expect(await upgrade(bench, { origin: 'https://evil.example' })).toBe(403);
+    expect(await upgrade(bench, { origin: `http://127.0.0.1:${bench.pagePort + 1}` })).toBe(403);
+    expect(await upgrade(bench, { origin: 'null' })).toBe(403);
+    expect(await upgrade(bench)).toBe(403);
+    expect(logFileLines(bench)).toEqual(before);
+    expect(bench.hub.status().holder.connected).toBe(false);
+  });
+
+  it('accepts the page\'s own Origin', async () => {
+    expect(await upgrade(bench, { origin: bench.pageUrl('') })).toBe(101);
+    // The scripted holder sends it, as a browser does
+    await ScriptedHolder.connect(bench);
+    expect(bench.hub.status().holder.connected).toBe(true);
+  });
+
+  it('takes the host from X-Forwarded-Host behind the edge', async () => {
+    const edge = { 'x-forwarded-host': 'bench.pvginkel-x.home' };
+    expect(await upgrade(bench, { origin: 'https://bench.pvginkel-x.home', headers: edge })).toBe(101);
+    expect(await upgrade(bench, { origin: 'https://BENCH.pvginkel-x.home', headers: edge })).toBe(101);
+    expect(await upgrade(bench, { origin: bench.pageUrl(''), headers: edge })).toBe(403);
+    expect(await upgrade(bench, { origin: 'https://other.home', headers: edge })).toBe(403);
+  });
+
+  it('accepts the origins it is given besides', async () => {
+    await bench.close();
+    bench = await startTestBench({ allowedOrigins: ['http://localhost:5173/', 'not a url'] });
+    expect(await upgrade(bench, { origin: 'http://localhost:5173' })).toBe(101);
+    expect(await upgrade(bench, { origin: 'http://localhost:5174' })).toBe(403);
+    expect(await upgrade(bench, { origin: bench.pageUrl('') })).toBe(101);
   });
 });

@@ -156,6 +156,8 @@ export interface HolderOptions {
   port?: PortReport | null;
   autoPong?: boolean;
   headers?: Record<string, string>;
+  /** The Origin the holder sends; the page's own by default, as a browser sends it. */
+  origin?: string;
 }
 
 export const OPEN_PORT: PortReport = { state: 'open', usbVendorId: 0x303a, usbProductId: 0x1001, chip: 'ESP32-S3', mac: 'dc:da:0c:11:22:33' };
@@ -192,7 +194,11 @@ export class ScriptedHolder {
 
   /** Connects and opens the socket, without a hello. */
   static async open(bench: TestBench, opts: HolderOptions = {}): Promise<ScriptedHolder> {
-    const h = new ScriptedHolder(bench.holderUrl(), { headers: opts.headers }, opts.autoPong ?? true);
+    const h = new ScriptedHolder(
+      bench.holderUrl(),
+      { headers: opts.headers, origin: opts.origin ?? bench.pageUrl('') },
+      opts.autoPong ?? true,
+    );
     await new Promise<void>((resolve, reject) => {
       h.ws.once('open', () => resolve());
       h.ws.once('error', reject);
