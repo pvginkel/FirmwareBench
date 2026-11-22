@@ -4,7 +4,9 @@
 import type http from 'node:http';
 import { BadBuildDir, readBuild } from './build-dir.ts';
 import { ApiError } from './errors.ts';
-import type { HolderHub, HubOutcome } from './holder-hub.ts';
+import type { Job, JobKind } from '../shared/protocol.ts';
+import type { BuildImage } from './build-dir.ts';
+import type { HolderHub } from './holder-hub.ts';
 import type { LogLine, SerialLog } from './serial-log.ts';
 
 export interface AgentApiConfig {
@@ -42,24 +44,23 @@ export function agentApi(hub: HolderHub, log: SerialLog, cfg: AgentApiConfig): h
     const timeoutMs = seconds(body.timeout, cfg.flashTimeoutMs);
     await hub.claim('flash', cfg.portWaitMs);
     const t0 = Date.now();
-    const cursor = log.marker(`flash started: ${build.dir} (${build.chip}, ${build.images.map((i) => `0x${i.offset.toString(16)} ${i.name}`).join(', ')})`);
-    const outcome = await runJob('flash', cursor, () =>
-      hub.run(
-        (jobId) => ({
-          kind: 'flash',
-          chip: build.chip,
-          flash: build.flash,
-          images: build.images.map((im, i) => ({
-            offset: im.offset,
-            name: im.name,
-            url: `/jobs/${jobId}/images/${i}`,
-            size: im.size,
-            md5: im.md5,
-          })),
-        }),
-        timeoutMs,
-        build.images,
-      ),
+    const { cursor, outcome } = await runJob(
+      'flash',
+      `flash started: ${build.dir} (${build.chip}, ${build.images.map((i) => `0x${i.offset.toString(16)} ${i.name}`).join(', ')})`,
+      (jobId) => ({
+        kind: 'flash',
+        chip: build.chip,
+        flash: build.flash,
+        images: build.images.map((im, i) => ({
+          offset: im.offset,
+          name: im.name,
+          url: imageUrl(jobId, i),
+          size: im.size,
+          md5: im.md5,
+        })),
+      }),
+      timeoutMs,
+      build.images,
     );
     const secondsTaken = Math.round((Date.now() - t0) / 100) / 10;
     log.marker(`flash done in ${secondsTaken} s: ${outcome.chip ?? '?'} ${outcome.mac ?? ''}`.trimEnd());
@@ -68,8 +69,7 @@ export function agentApi(hub: HolderHub, log: SerialLog, cfg: AgentApiConfig): h
 
   async function reset() {
     await hub.claim('reset', cfg.portWaitMs);
-    const cursor = log.marker('reset');
-    await runJob('reset', cursor, () => hub.run(() => ({ kind: 'reset' }), cfg.resetTimeoutMs));
+    const { cursor } = await runJob('reset', 'reset', () => ({ kind: 'reset' }), cfg.resetTimeoutMs);
     return { cursor };
   }
 
@@ -78,34 +78,39 @@ export function agentApi(hub: HolderHub, log: SerialLog, cfg: AgentApiConfig): h
     if (typeof line !== 'string') throw new ApiError('bad_request', 'line is required');
     if (/[\r\n]/.test(line)) throw new ApiError('bad_request', 'line must be one line; the bench adds the line end');
     await hub.claim('console', cfg.portWaitMs);
-    const cursor = log.marker(`console: ${line}`);
-    await runJob('console', cursor, () => hub.run(() => ({ kind: 'console', line }), cfg.consoleTimeoutMs));
+    const { cursor } = await runJob('console', `console: ${line}`, () => ({ kind: 'console', line }), cfg.consoleTimeoutMs);
     return { cursor };
   }
 
-  /** Runs a claimed job, and turns a failed outcome into the API error, with a marker. */
-  async function runJob(kind: string, cursor: number, start: () => Promise<HubOutcome>) {
-    let outcome: HubOutcome;
+  /**
+   * Runs a job in the slot a claim took: writes its start marker, whose cursor the call
+   * answers, and turns a failed outcome into the API error, with a marker. The slot is given
+   * back on any failure before the job reaches the holder.
+   */
+  async function runJob(kind: JobKind, startMarker: string, makeJob: (jobId: string) => Job, timeoutMs: number, images: BuildImage[] = []) {
+    let cursor: number | null = null;
+    let outcome;
     try {
-      outcome = await start();
+      cursor = log.marker(startMarker);
+      outcome = await hub.run(makeJob, timeoutMs, images);
     } catch (e) {
       hub.release();
       if (e instanceof ApiError) {
         log.marker(`${kind} ${e.code === 'timed_out' ? 'timed out' : 'failed'}: ${e.message}`);
-        e.extra.cursor = cursor;
+        if (cursor !== null) e.extra.cursor = cursor;
       }
       throw e;
     }
     if (!outcome.ok) {
-      log.marker(`${kind} failed: ${outcome.message}`);
+      log.marker(`${kind} failed: ${outcome.code}: ${outcome.message}`);
       throw new ApiError(outcome.code, outcome.message, { cursor, ...('chip' in outcome && outcome.chip ? { chip: outcome.chip } : {}) });
     }
-    return outcome;
+    return { cursor, outcome };
   }
 
   async function readLog(url: URL, res: http.ServerResponse) {
     const since = optionalInt(url.searchParams.get('since'), 'since');
-    const limit = Math.min(optionalInt(url.searchParams.get('limit'), 'limit') ?? DEFAULT_LIMIT, MAX_LIMIT);
+    const limit = Math.max(1, Math.min(optionalInt(url.searchParams.get('limit'), 'limit') ?? DEFAULT_LIMIT, MAX_LIMIT));
     const wait = url.searchParams.get('wait');
     if (wait === null) {
       const { lines, truncated } = log.since(since, limit);
@@ -118,10 +123,10 @@ export function agentApi(hub: HolderHub, log: SerialLog, cfg: AgentApiConfig): h
     } catch (e) {
       throw new ApiError('bad_request', `wait is not a regular expression: ${(e as Error).message}`);
     }
-    const timeoutS = optionalNumber(url.searchParams.get('timeout'), 'timeout') ?? DEFAULT_WAIT_S;
+    const timeoutS = Math.min(optionalNumber(url.searchParams.get('timeout'), 'timeout') ?? DEFAULT_WAIT_S, MAX_WAIT_S);
     const abort = new AbortController();
     res.on('close', () => abort.abort());
-    const out = await log.waitFor(since ?? log.cursor, pattern, Math.min(timeoutS, MAX_WAIT_S) * 1000, limit, abort.signal);
+    const out = await log.waitFor(since ?? log.cursor, pattern, timeoutS * 1000, limit, abort.signal);
     if (!out.matched) {
       throw new ApiError('timed_out', `no line matched ${wait} within ${timeoutS} s`, { lines: out.lines.map(lineJson), cursor: out.cursor });
     }
@@ -144,6 +149,11 @@ export function agentApi(hub: HolderHub, log: SerialLog, cfg: AgentApiConfig): h
   };
 }
 
+/** Where the holder fetches a running job's image, on the page port. */
+export function imageUrl(jobId: string, index: number): string {
+  return `/jobs/${jobId}/images/${index}`;
+}
+
 function lineJson(l: LogLine) {
   return { cursor: l.cursor, time: new Date(l.ts).toISOString(), text: l.text, ...(l.marker ? { marker: true } : {}) };
 }
@@ -158,14 +168,13 @@ function readJson(req: http.IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks: Buffer[] = [];
+    // A body that is too large is read to its end and dropped, so the answer still goes out
     req.on('data', (c: Buffer) => {
       size += c.length;
-      if (size > MAX_BODY) {
-        reject(new ApiError('bad_request', 'body too large'));
-        req.destroy();
-      } else chunks.push(c);
+      if (size <= MAX_BODY) chunks.push(c);
     });
     req.on('end', () => {
+      if (size > MAX_BODY) return reject(new ApiError('bad_request', `the body is larger than ${MAX_BODY} bytes`));
       const text = Buffer.concat(chunks).toString('utf8').trim();
       if (!text) return resolve({});
       try {

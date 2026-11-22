@@ -12,6 +12,8 @@ export interface BuildImage {
   file: string;
   size: number;
   md5: string;
+  /** The bytes read and hashed, which are what the holder is served: a rebuild meanwhile changes nothing. */
+  data: Buffer;
 }
 
 export interface Build {
@@ -71,6 +73,7 @@ export async function readBuild(buildDir: unknown, workRoot: string): Promise<Bu
       file,
       size: data.length,
       md5: crypto.createHash('md5').update(data).digest('hex'),
+      data,
     });
   }
   images.sort((x, y) => x.offset - y.offset);

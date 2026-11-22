@@ -39,10 +39,16 @@ export class ApiError extends Error {
   }
 
   get status(): number {
-    return STATUS[this.code];
+    return STATUS[this.code] ?? 500;
   }
 
   body(): Record<string, unknown> {
     return { error: this.code, message: this.message, ...this.extra };
   }
+}
+
+const CODES = new Set<string>(Object.keys(STATUS));
+
+export function isApiErrorCode(code: unknown): code is ApiErrorCode {
+  return typeof code === 'string' && CODES.has(code);
 }

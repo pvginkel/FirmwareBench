@@ -45,7 +45,7 @@ export function cleanLine(raw: string): string {
   return raw.replace(ANSI, '').replace(CONTROL, '');
 }
 
-const LINE_FORMAT = /^\S+ (\d+) [|=] /;
+const LINE_FORMAT = /^\d{4}-\d\d-\d\dT[\d:.]+Z (\d+) [|=] /;
 
 export class SerialLog {
   readonly path: string;
@@ -107,6 +107,7 @@ export class SerialLog {
     this.partial = rest;
     if (this.partialTimer) clearTimeout(this.partialTimer);
     this.partialTimer = rest ? setTimeout(() => this.flushPartial(), this.partialFlushMs) : null;
+    this.partialTimer?.unref();
   }
 
   /** Writes a marker line, after any partial device line, and answers its cursor. */
@@ -118,25 +119,29 @@ export class SerialLog {
   /** Lines after `cursor`, at most `limit`, oldest first. Without a cursor, the last `limit`. */
   since(cursor: number | null, limit: number): { lines: LogLine[]; truncated: boolean } {
     if (cursor === null) return { lines: this.ring.slice(-limit), truncated: false };
-    const first = this.ring[0];
-    const truncated = first !== undefined && first.cursor > cursor + 1;
+    // Lines between the cursor and the oldest one in memory are only in the file, if anywhere
+    const oldest = this.ring[0]?.cursor ?? this.seq + 1;
+    const truncated = oldest > cursor + 1;
     const lines = this.ring.filter((l) => l.cursor > cursor);
     return { lines: lines.slice(0, limit), truncated };
   }
 
   /**
-   * Waits for a line after `cursor` that matches `pattern`, and answers the lines up to and
-   * including it (the last `limit` of them). A line already in the log counts.
+   * Waits for a device line after `cursor` that matches `pattern`, and answers the lines up to
+   * and including it (the last `limit` of them, markers included). A line already in the log
+   * counts. Markers never match: they echo console lines and build paths, which would.
    */
   waitFor(cursor: number, pattern: RegExp, timeoutMs: number, limit: number, signal?: AbortSignal): Promise<WaitOutcome> {
+    const matches = (l: LogLine) => !l.marker && pattern.test(l.text);
     const seen = this.ring.filter((l) => l.cursor > cursor);
-    const hit = seen.find((l) => pattern.test(l.text));
+    const hit = seen.find(matches);
     if (hit) {
       const upTo = seen.filter((l) => l.cursor <= hit.cursor);
       return Promise.resolve({ matched: true, match: hit, lines: upTo.slice(-limit), cursor: hit.cursor });
     }
+    if (signal?.aborted) return Promise.resolve({ matched: false, lines: seen.slice(-limit), cursor: this.seq });
     return new Promise((resolve) => {
-      const lines = seen;
+      const lines = seen.slice(-limit);
       const finish = (outcome: WaitOutcome) => {
         clearTimeout(timer);
         this.listeners.delete(onLine);
@@ -145,8 +150,8 @@ export class SerialLog {
       };
       const onLine = (line: LogLine) => {
         lines.push(line);
-        if (lines.length > limit) lines.shift();
-        if (pattern.test(line.text)) finish({ matched: true, match: line, lines: [...lines], cursor: line.cursor });
+        while (lines.length > limit) lines.shift();
+        if (matches(line)) finish({ matched: true, match: line, lines: [...lines], cursor: line.cursor });
       };
       const onAbort = () => finish({ matched: false, lines: [...lines], cursor: this.seq });
       const timer = setTimeout(onAbort, timeoutMs);
