@@ -91,10 +91,6 @@ export class PortKeeper {
     return this.stateValue;
   }
 
-  get monitoring(): boolean {
-    return this.monitor !== null;
-  }
-
   report(): PortReport {
     const info = this.current?.getInfo() ?? {};
     return { state: this.stateValue, usbVendorId: info.usbVendorId, usbProductId: info.usbProductId, chip: this.chip, mac: this.mac };
