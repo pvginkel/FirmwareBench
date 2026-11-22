@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bench</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 1rem 1.5rem; color: #222; }
+  header { display: flex; align-items: center; gap: 1rem; margin-bottom: .6rem; }
+  h1 { font-size: 1.3rem; margin: 0; }
+  h2 { font-size: 1rem; margin: 1rem 0 .3rem; }
+  button { font: inherit; padding: .3rem .8rem; cursor: pointer; }
+  #problem { padding: .5rem .7rem; background: #fde8e8; border: 1px solid #e3a0a0; border-radius: 4px; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: .2rem 1rem; margin: 0; }
+  dt { color: #555; }
+  dd { margin: 0; }
+  .good { color: #186a1e; }
+  .bad { color: #a11; }
+  progress { width: 24rem; }
+  .row { display: flex; gap: 1.5rem; align-items: flex-start; }
+  .log { flex: 3; min-width: 0; }
+  .events { flex: 2; min-width: 0; }
+  pre { background: #111; color: #ddd; padding: .5rem; height: 32rem; overflow: auto; font-size: 12px; margin: 0; white-space: pre-wrap; }
+  ol { list-style: none; padding: 0; margin: 0; height: 32rem; overflow: auto; font: 12px ui-monospace, monospace; }
+  ol li { border-bottom: 1px solid #eee; padding: .1rem 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Bench</h1>
+  <button id="choose" type="button">Choose port</button>
+</header>
+<p id="problem" hidden></p>
+<dl>
+  <dt>Server</dt><dd id="server">starting</dd>
+  <dt>Holder</dt><dd id="holder">—</dd>
+  <dt>Port</dt><dd id="port">—</dd>
+  <dt>Chip</dt><dd id="chip">—</dd>
+  <dt>Job</dt><dd><span id="job">none</span> <progress id="progress" hidden></progress></dd>
+  <dt>Last job</dt><dd id="last">—</dd>
+</dl>
+<div class="row">
+  <section class="log">
+    <h2>Device log</h2>
+    <pre id="log"></pre>
+  </section>
+  <section class="events">
+    <h2>Events</h2>
+    <ol id="events"></ol>
+  </section>
+</div>
+<script type="module" src="./main.ts"></script>
+</body>
+</html>
