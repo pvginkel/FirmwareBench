@@ -143,6 +143,18 @@ describe('a flash', () => {
     expect(esptool.modes).toEqual([]);
   });
 
+  it('flashes again after a flash: the monitor gives the handed-back port up cleanly', async () => {
+    expect(await run('j1', flashJob('j1'))).toMatchObject({ ok: true });
+    h.port.push('between\n');
+    await tick(5);
+    expect(await run('j1-again', flashJob('j1'))).toMatchObject({ ok: true });
+
+    expect(esptool.writes).toHaveLength(2);
+    expect(h.port.rtsPulses()).toEqual([100, 100]);
+    expect(h.server.logText()).toBe('between\n');
+    expect(h.engine.status().port.state).toBe('open');
+  });
+
   it('answers busy to a job that comes while one runs', async () => {
     h.server.last.message({ t: 'job', jobId: 'j1', job: flashJob('j1') });
     h.server.last.message({ t: 'job', jobId: 'j9', job: { kind: 'reset' } });
