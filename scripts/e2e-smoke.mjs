@@ -152,7 +152,7 @@ if (!up) { console.log(fs.readFileSync(path.join(runDir, 'server.out'), 'utf8'))
 const browser = await chromium.launch({ channel: 'chromium' });
 try {
   const notes = [];
-  const { ctx, page } = await newPage(browser, notes);
+  const { page } = await newPage(browser, notes);
   const workerGot = new Promise((r) => page.on('response', (res) => { if (/assets\/worker-.*\.js/.test(res.url())) r(res.status()); }));
   await page.goto(`http://localhost:${PAGE}/`);
   const wstatus = await Promise.race([workerGot, sleep(5000).then(() => null)]);
@@ -167,7 +167,6 @@ try {
   const opened = await until(async () => (await status()).port?.state === 'open', 8000);
   check('3d choosing the port gives port.open', !!opened, JSON.stringify((await status()).port));
 
-  const c0 = (await status()).log.cursor;
   await page.evaluate(() => window.__fake.push('boot ok\n\x1b[32mgreen line\x1b[0m\nthird \x1b[1;31mred\x1b[0m done\n'));
   await sleep(500);
   const lt = await logText();

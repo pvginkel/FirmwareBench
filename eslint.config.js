@@ -15,4 +15,34 @@ export default defineConfig(
       ],
     },
   },
+  {
+    // Plain Node scripts. TypeScript checks the .ts files' globals; these get Node's, and
+    // `window`, which the code they hand to a browser page (page.evaluate) runs against
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      globals: Object.fromEntries(
+        [
+          'process',
+          'console',
+          'setTimeout',
+          'clearTimeout',
+          'setInterval',
+          'clearInterval',
+          'fetch',
+          'performance',
+          'navigator',
+          'Event',
+          'EventTarget',
+          'DOMException',
+          'ReadableStream',
+          'WritableStream',
+          'TextDecoder',
+          'TextEncoder',
+          'URL',
+          'Buffer',
+          'window',
+        ].map((name) => [name, 'readonly']),
+      ),
+    },
+  },
 );
