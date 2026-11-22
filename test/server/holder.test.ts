@@ -1,6 +1,7 @@
 // The holder's connection: the handshake, refusals, the heartbeat, the port's state, and
 // frames the protocol does not allow.
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -100,6 +101,26 @@ describe('the handshake', () => {
     expect(b.hub.status().holder).toMatchObject({ connected: true, name: 'fresh' });
     expect(logFileLines(b)).toContainEqual(expect.stringMatching(/ = holder replaced$/));
     await fresh.close();
+  });
+
+  it('names the page\'s entry script in the welcome, as index.html names it at each hello', async () => {
+    const b = await start();
+    const first = await ScriptedHolder.open(b);
+    first.hello();
+    expect((await first.next('welcome')).page).toBe('index-AbC123de.js');
+    await first.close();
+
+    // A rebuild, with the server running on
+    fs.writeFileSync(path.join(b.pageDir, 'index.html'), '<script crossorigin type="module" src="/assets/index-Zz9.js?v=1"></script>');
+    const second = await ScriptedHolder.open(b);
+    second.hello();
+    expect((await second.next('welcome')).page).toBe('index-Zz9.js');
+    await second.close();
+
+    fs.rmSync(path.join(b.pageDir, 'index.html'));
+    const third = await ScriptedHolder.open(b);
+    third.hello();
+    expect(await third.next('welcome')).toEqual({ t: 'welcome', protocol: PROTOCOL_VERSION });
   });
 
   it('takes the next holder at once when the first has closed', async () => {

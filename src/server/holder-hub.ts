@@ -35,6 +35,8 @@ export interface HubOptions {
   helloTimeoutMs?: number;
   /** How long a job that timed out keeps the slot, waiting for the holder's late result. */
   abandonMs?: number;
+  /** The page's entry script as the build names it now, for the welcome. Called at each hello. */
+  pageEntry?: () => string | undefined;
   now?: () => number;
 }
 
@@ -87,6 +89,7 @@ export class HolderHub {
   private readonly staleMs: number;
   private readonly helloTimeoutMs: number;
   private readonly abandonMs: number;
+  private readonly pageEntry: () => string | undefined;
   private readonly now: () => number;
   private holder: Holder | null = null;
   private port: PortReport = { state: 'none' };
@@ -100,6 +103,7 @@ export class HolderHub {
     this.staleMs = opts.staleMs ?? 60000;
     this.helloTimeoutMs = opts.helloTimeoutMs ?? 10000;
     this.abandonMs = opts.abandonMs ?? 60000;
+    this.pageEntry = opts.pageEntry ?? (() => undefined);
     this.now = opts.now ?? Date.now;
   }
 
@@ -265,7 +269,8 @@ export class HolderHub {
       ping: setInterval(() => this.heartbeat(h), this.pingIntervalMs),
     };
     this.holder = h;
-    this.send(h, { t: 'welcome', protocol: PROTOCOL_VERSION });
+    const page = this.pageEntry();
+    this.send(h, { t: 'welcome', protocol: PROTOCOL_VERSION, ...(page ? { page } : {}) });
     this.log.marker(`holder connected: ${h.name} from ${from}${h.userAgent ? ` (${h.userAgent})` : ''}`);
   }
 

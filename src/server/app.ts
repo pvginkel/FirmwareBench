@@ -5,7 +5,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { agentApi, type AgentApiConfig } from './agent-api.ts';
 import { HolderHub, type HubOptions } from './holder-hub.ts';
-import { createPageServer } from './page-server.ts';
+import { createPageServer, pageEntry } from './page-server.ts';
 import { SerialLog, type SerialLogOptions } from './serial-log.ts';
 
 /** The agent API binds here and nowhere else, so the edge never reaches it. */
@@ -52,7 +52,7 @@ export interface Bench {
 export async function startBench(opts: BenchOptions): Promise<Bench> {
   const log = new SerialLog({ ...opts.log, dir: opts.logDir });
   log.open();
-  const hub = new HolderHub({ ...opts.hub, log });
+  const hub = new HolderHub({ pageEntry: () => pageEntry(opts.pageDir), ...opts.hub, log });
   const page = createPageServer({ hub, pageDir: opts.pageDir, allowedOrigins: opts.allowedOrigins });
   const api = http.createServer(
     agentApi(hub, log, {

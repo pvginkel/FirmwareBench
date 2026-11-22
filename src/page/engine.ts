@@ -74,6 +74,7 @@ export class Engine {
   private backlog = '';
   private job: JobView | null = null;
   private lastJob: LastJob | undefined;
+  private serverPage: string | undefined;
 
   constructor(deps: EngineDeps) {
     this.deps = deps;
@@ -87,7 +88,7 @@ export class Engine {
     });
     const hello = { t: 'hello', protocol: PROTOCOL_VERSION, holder: `bench page (${deps.context})`, userAgent: deps.userAgent } as const;
     this.link = new ServerLink(holderUrl(deps.location), hello, deps.openSocket, deps.clock, {
-      welcomed: () => this.welcomed(),
+      welcomed: (page) => this.welcomed(page),
       job: (jobId, job) => void this.runJob(jobId, job),
       changed: () => this.publish(),
     });
@@ -116,6 +117,7 @@ export class Engine {
       port: this.keeper.report(),
       job: this.job,
       lastJob: this.lastJob,
+      ...(this.serverPage ? { serverPage: this.serverPage } : {}),
     };
   }
 
@@ -322,7 +324,11 @@ export class Engine {
     };
   }
 
-  private welcomed(): void {
+  private welcomed(page: string | undefined): void {
+    if (page !== this.serverPage) {
+      this.serverPage = page;
+      this.publish();
+    }
     this.link.send({ t: 'port', port: this.keeper.report() });
     if (this.backlog) {
       this.link.send({ t: 'log', text: this.backlog });

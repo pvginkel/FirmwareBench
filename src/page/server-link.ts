@@ -43,8 +43,8 @@ export function holderUrl(location: { protocol: string; host: string }): string 
 }
 
 export interface LinkEvents {
-  /** The server took this page as the holder. */
-  welcomed(): void;
+  /** The server took this page as the holder. `page` is the entry script the server's build names. */
+  welcomed(page: string | undefined): void;
   job(jobId: string, job: Job): void;
   changed(): void;
 }
@@ -146,7 +146,7 @@ export class ServerLink {
       case 'welcome':
         this.retryMs = FIRST_RETRY_MS;
         this.setState('holder', undefined);
-        this.events.welcomed();
+        this.events.welcomed(msg.page);
         break;
       case 'ping':
         this.socket?.send(JSON.stringify({ t: 'pong', ts: msg.ts } satisfies HolderMessage));

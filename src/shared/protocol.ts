@@ -74,7 +74,16 @@ export type HolderMessage =
 
 /** Server to holder. */
 export type ServerMessage =
-  | { t: 'welcome'; protocol: number }
+  | {
+      t: 'welcome';
+      protocol: number;
+      /**
+       * The file name of the built page's entry script, `index-<hash>.js`, as the server's
+       * `index.html` names it at this hello. A page loaded from another one is out of date
+       * and reloads itself. Absent when the page is not built.
+       */
+      page?: string;
+    }
   /** Sent before the server closes the socket: another holder is connected, or the protocol differs. */
   | { t: 'refused'; reason: string }
   | { t: 'job'; jobId: string; job: Job }

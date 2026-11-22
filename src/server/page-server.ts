@@ -39,6 +39,27 @@ const TYPES: Record<string, string> = {
 
 const IMAGE_PATH = /^\/jobs\/([^/]+)\/images\/(\d{1,6})$/;
 
+/**
+ * The file name of the entry script `index.html` names now, `index-<hash>.js`, or undefined
+ * when the page is not built. It reads the file on each call: a rebuild does not restart the
+ * server.
+ */
+export function pageEntry(pageDir: string): string | undefined {
+  let html: string;
+  try {
+    html = fs.readFileSync(path.join(pageDir, 'index.html'), 'utf8');
+  } catch {
+    return undefined;
+  }
+  for (const tag of html.match(/<script\b[^>]*>/gi) ?? []) {
+    if (!/\btype=["']?module\b/i.test(tag)) continue;
+    const src = /\bsrc=["']?([^"'\s>]+)/i.exec(tag)?.[1];
+    const name = src ? path.posix.basename(src.split(/[?#]/)[0] ?? '') : '';
+    if (name) return name;
+  }
+  return undefined;
+}
+
 export function createPageServer(opts: PageServerOptions): PageServer {
   const root = path.resolve(opts.pageDir);
   const allowed = new Set((opts.allowedOrigins ?? []).map(normalOrigin).filter((o): o is string => o !== null));

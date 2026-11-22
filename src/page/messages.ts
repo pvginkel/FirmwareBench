@@ -44,6 +44,8 @@ export interface EngineStatus {
   port: PortReport;
   job: JobView | null;
   lastJob?: LastJob;
+  /** The page's entry script as the server's build names it, from the last welcome. */
+  serverPage?: string;
 }
 
 export type EngineMessage =

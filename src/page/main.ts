@@ -3,6 +3,7 @@
 // getPorts(); without Web Serial in workers, it runs here on the page.
 
 import type { EngineMessage, EngineStatus, PageMessage, WorkerReady } from './messages.ts';
+import { entryName, newPageReloader } from './reload.ts';
 import type { SerialLike, SerialPortLike } from './serial.ts';
 
 /** Device log lines the page keeps. */
@@ -130,9 +131,22 @@ function addEvent(text: string): void {
   while (view.events.childElementCount > MAX_EVENTS) view.events.lastElementChild?.remove();
 }
 
+const reloadIfNewer = newPageReloader({
+  own: entryName(import.meta.url),
+  storage: {
+    getItem: (key) => sessionStorage.getItem(key),
+    setItem: (key, value) => sessionStorage.setItem(key, value),
+  },
+  reload: () => location.reload(),
+  now: () => Date.now(),
+  note: addEvent,
+});
+
 function onEngine(msg: EngineMessage): void {
-  if (msg.t === 'status') renderStatus(msg.status);
-  else if (msg.t === 'log') addLog(msg.text);
+  if (msg.t === 'status') {
+    renderStatus(msg.status);
+    reloadIfNewer(msg.status);
+  } else if (msg.t === 'log') addLog(msg.text);
   else addEvent(msg.text);
 }
 
