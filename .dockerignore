@@ -1,0 +1,12 @@
+# What is never a build input: the install and the output the build stage makes itself, the repo's
+# history, environment and agent state, and what the smoke script leaves behind.
+.git
+node_modules
+dist
+coverage
+run-e2e
+.kubecoder
+.claude
+.env
+*.log
+ONBOARDING-STATE*.md
