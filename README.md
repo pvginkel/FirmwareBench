@@ -72,3 +72,9 @@ The catalog entry lives in KubeCoderDeploy's `chart/values.yaml`, under
 there. The entry names the `latest` tag, which each environment start resolves to a digest, so an
 environment runs a new build after its next start. A change to the entry itself reaches dev when
 KubeCoderDeploy's `main` syncs, and prd when the operator promotes it.
+
+## Design
+
+Why the bench is built this way, and how it was built: `docs/remote-flashing-design.md` (the
+options, the spikes' answers in §9 and the decisions) and `docs/remote-flashing-plan.md` (the
+build plan). Both came from ToiletAutomation, the first project to use the bench.
