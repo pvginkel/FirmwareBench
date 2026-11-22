@@ -102,6 +102,38 @@ describe('a flash', () => {
     expect(h.server.logText().endsWith('Hello world!\r\nlater\n')).toBe(true);
   });
 
+  it('logs only what the chip sends after the reset pulse, not a boot still on its way when the pulse began', async () => {
+    // On the board, the reopen at the monitor's rate before the pulse starts a boot of its
+    // own. Its lines are queued in the port's stream when the read loop starts, and more come
+    // while RTS is held
+    const stale = [
+      'ESP-ROM:esp32s3-20210327\r\n',
+      '        Usage          Type ST Offset   Length\r\n',
+      'I (59) boot:  0 nvs              WiFi data        01 02 00009000 00006000\r\n',
+      'I (109) esp_image: segment 3: paddr=00020020 vaddr=42000020 size=0f4b0h ( 62640) map\r\n',
+    ];
+    const boot = ['ESP-ROM:esp32s3-20210327\r\n', 'rst:0x15 (USB_UART_CHIP_RESET),boot:0x8 (SPI_FAST_FLASH_BOOT)\r\n', 'Hello world!\r\n'];
+    const open = h.port.open.bind(h.port);
+    h.port.open = async (options) => {
+      await open(options);
+      if (esptool.writes.length === 0 || options.baudRate !== 115200) return;
+      h.port.push(stale[0]!);
+      setTimeout(() => h.port.push(stale[1]!), 40);
+      setTimeout(() => h.port.push(stale[2]!), 60);
+      setTimeout(() => h.port.push(stale[3]!), 110);
+    };
+    h.port.onReset = () => {
+      h.port.push(boot[0]!);
+      setTimeout(() => h.port.push(boot[1]!), 1);
+      setTimeout(() => h.port.push(boot[2]!), 400);
+    };
+    await run('j1', flashJob('j1'));
+    await tick(500);
+
+    expect(h.server.logText()).toBe(boot.join(''));
+    expect(new TextDecoder().decode(esptool.released[0])).toBe(boot[0]);
+  });
+
   it('writes nothing to another chip, and puts it back into its firmware', async () => {
     await h.engine.stop();
     esptool = fakeEsptool({ chip: 'ESP32' });

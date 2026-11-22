@@ -134,9 +134,12 @@ export class EsptoolSession implements EspSession {
     const raw = this.transport.raw;
     // A UART bridge has to read the boot at the firmware's rate; USB-Serial-JTAG ignores it
     if (raw.baudrate !== MONITOR_BAUD) await raw.changeBaudrate(MONITOR_BAUD);
-    // What the stub sent before the reset is not the device's log
-    raw.flushInput();
-    await pulseRts((on) => raw.setRTS(on), clock);
+    // Nothing read before the chip comes out of reset is the first boot: not what the stub
+    // sent, and not the boot the reopen above can start on the board. flushInput() only
+    // drops what the read loop has taken in, and the reopen's boot is still queued in the new
+    // stream when the loop starts. So the buffer is emptied at the end of the pulse, when the
+    // loop has had its 100 ms to take in everything sent before it
+    await pulseRts((on) => raw.setRTS(on), clock, () => raw.flushInput());
   }
 
   release(): Promise<Uint8Array> {

@@ -84,11 +84,13 @@ export const RESET_PULSE_MS = 100;
  * The reset that works on the board: RTS on, 100 ms, RTS off. esptool-js 0.7.1's own
  * `after('hard_reset')` resets nothing there. `setRts` must send DTR again after each RTS
  * change, as esptool-js's `Transport.setRTS` does: Windows' usbser.sys only passes an RTS
- * change on with a DTR change.
+ * change on with a DTR change. `beforeRelease` runs at the end of the pulse, just before RTS
+ * is released.
  */
-export async function pulseRts(setRts: (on: boolean) => Promise<void>, clock: Clock): Promise<void> {
+export async function pulseRts(setRts: (on: boolean) => Promise<void>, clock: Clock, beforeRelease?: () => void): Promise<void> {
   await setRts(true);
   await sleep(clock, RESET_PULSE_MS);
+  beforeRelease?.();
   await setRts(false);
 }
 
