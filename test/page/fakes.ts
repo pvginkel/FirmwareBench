@@ -9,13 +9,15 @@
 import { vi } from 'vitest';
 import type { FlashOptions } from 'esptool-js';
 import { Engine } from '../../src/page/engine.ts';
-import { EsptoolSession, FLASH_BAUD, ROM_BAUD, TransportHandle, type ConnectEsptool, type ConnectMode, type EspSession } from '../../src/page/esptool.ts';
+import { EsptoolSession, ROM_BAUD, TransportHandle, flashBaud, type ConnectEsptool, type ConnectMode, type EspSession } from '../../src/page/esptool.ts';
 import type { EngineMessage } from '../../src/page/messages.ts';
 import { realClock, type PortInfo, type PortSignals, type SerialLike, type SerialPortLike } from '../../src/page/serial.ts';
 import type { OpenSocket, SocketHandle, SocketHandlers } from '../../src/page/server-link.ts';
 import type { HolderMessage, ServerMessage } from '../../src/shared/protocol.ts';
 
 export const S3_INFO: PortInfo = { usbVendorId: 0x303a, usbProductId: 0x1001 };
+/** A CH343 UART bridge, as on SonosDisplay. */
+export const BRIDGE_INFO: PortInfo = { usbVendorId: 0x1a86, usbProductId: 0x55d3 };
 
 const encoder = new TextEncoder();
 
@@ -269,6 +271,8 @@ export interface FakeEsptool {
   modes: ConnectMode[];
   /** What writeFlash() was given. */
   writes: FlashOptions[];
+  /** The rate esptool-js's Transport was at for each writeFlash(). */
+  writeBauds: number[];
   /** What each session's release() handed back. */
   released: Uint8Array[];
 }
@@ -276,29 +280,32 @@ export interface FakeEsptool {
 /**
  * esptool-js with the real Transport over the fake port, and a fake chip behind it.
  * connect() does what ESPLoader.main() does to the port: open at the ROM rate, start the
- * read loop, then the baud change, which closes and reopens it. `before` runs first in
- * each connect, to make one fail.
+ * read loop, then, when the flash rate is another, the baud change, which closes and reopens
+ * it. `before` runs first in each connect, to make one fail.
  */
 export function fakeEsptool(opts: { chip?: string; mac?: string; before?: (port: SerialPortLike, mode: ConnectMode, n: number) => void } = {}): FakeEsptool {
   const writes: FlashOptions[] = [];
+  const writeBauds: number[] = [];
   const released: Uint8Array[] = [];
   const modes: ConnectMode[] = [];
-  const loader = {
-    writeFlash: async (o: FlashOptions) => {
-      writes.push(o);
-      o.fileArray.forEach((f, i) => {
-        o.reportProgress?.(i, 0, f.data.length);
-        o.reportProgress?.(i, f.data.length, f.data.length);
-      });
-    },
-  };
   const connect: ConnectEsptool = async (port, mode) => {
     const n = modes.push(mode);
     opts.before?.(port, mode, n);
     const transport = new TransportHandle(port);
     await transport.raw.connect(ROM_BAUD);
     void transport.raw.readLoop();
-    await transport.raw.changeBaudrate(FLASH_BAUD);
+    const baud = flashBaud(port);
+    if (baud !== ROM_BAUD) await transport.raw.changeBaudrate(baud);
+    const loader = {
+      writeFlash: async (o: FlashOptions) => {
+        writes.push(o);
+        writeBauds.push(transport.raw.baudrate);
+        o.fileArray.forEach((f, i) => {
+          o.reportProgress?.(i, 0, f.data.length);
+          o.reportProgress?.(i, f.data.length, f.data.length);
+        });
+      },
+    };
     const session: EspSession = new EsptoolSession(transport, loader, opts.chip ?? 'ESP32-S3', opts.mac ?? 'aa:bb:cc:dd:ee:ff');
     const release = session.release.bind(session);
     session.release = async () => {
@@ -308,7 +315,7 @@ export function fakeEsptool(opts: { chip?: string; mac?: string; before?: (port:
     };
     return session;
   };
-  return { connect, modes, writes, released };
+  return { connect, modes, writes, writeBauds, released };
 }
 
 /** fetch() for the job's images, by URL. */
@@ -347,10 +354,10 @@ export interface Started extends Harness {
   port: FakePort;
 }
 
-/** A holder that is welcomed, with a port granted earlier and open. */
-export async function started(opts: Parameters<typeof harness>[0] = {}): Promise<Started> {
+/** A holder that is welcomed, with a port granted earlier and open: the S3's own USB, unless `info` says otherwise. */
+export async function started(opts: Parameters<typeof harness>[0] & { info?: PortInfo } = {}): Promise<Started> {
   const h = harness(opts);
-  const port = new FakePort();
+  const port = new FakePort(opts.info);
   h.serial.ports.push(port);
   await h.engine.start();
   h.server.last.welcome();

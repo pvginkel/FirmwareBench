@@ -7,7 +7,19 @@ import { md5hex } from './md5.ts';
 import { MONITOR_BAUD, pulseRts, type Clock, type SerialPortLike } from './serial.ts';
 
 export const ROM_BAUD = 115200;
+/** Behind a UART bridge. */
 export const FLASH_BAUD = 460800;
+/** USB vendor of the chip's own USB: USB-Serial-JTAG, or USB-OTG. */
+export const ESPRESSIF_VID = 0x303a;
+
+/**
+ * The rate to flash at. The chip's own USB ignores the rate, and esptool-js changes it by
+ * closing and reopening the port, which starts a boot of its own on the S3. So there the
+ * flash stays at the ROM's rate, and esptool-js changes nothing.
+ */
+export function flashBaud(port: SerialPortLike): number {
+  return port.getInfo().usbVendorId === ESPRESSIF_VID ? ROM_BAUD : FLASH_BAUD;
+}
 
 export type ConnectMode = Before;
 export type Terminal = IEspLoaderTerminal;
@@ -132,13 +144,13 @@ export class EsptoolSession implements EspSession {
 
   async hardReset(clock: Clock): Promise<void> {
     const raw = this.transport.raw;
-    // A UART bridge has to read the boot at the firmware's rate; USB-Serial-JTAG ignores it
+    // Behind a UART bridge the boot has to be read at the firmware's rate
     if (raw.baudrate !== MONITOR_BAUD) await raw.changeBaudrate(MONITOR_BAUD);
     // Nothing read before the chip comes out of reset is the first boot: not what the stub
-    // sent, and not the boot the reopen above can start on the board. flushInput() only
-    // drops what the read loop has taken in, and the reopen's boot is still queued in the new
-    // stream when the loop starts. So the buffer is emptied at the end of the pulse, when the
-    // loop has had its 100 ms to take in everything sent before it
+    // sent, and not a boot the reopen above may start. flushInput() only drops what the read
+    // loop has taken in, and such a boot is still queued in the new stream when the loop
+    // starts. So the buffer is emptied at the end of the pulse, when the loop has had its
+    // 100 ms to take in everything sent before it
     await pulseRts((on) => raw.setRTS(on), clock, () => raw.flushInput());
   }
 
@@ -153,7 +165,8 @@ export class EsptoolSession implements EspSession {
 
 export const connectEsptool: ConnectEsptool = async (port, mode, terminal) => {
   const transport = new TransportHandle(port);
-  const loader = new ESPLoader({ transport: transport.raw, baudrate: FLASH_BAUD, romBaudrate: ROM_BAUD, terminal });
+  // main() changes the rate after the stub only when the two differ
+  const loader = new ESPLoader({ transport: transport.raw, baudrate: flashBaud(port), romBaudrate: ROM_BAUD, terminal });
   try {
     await loader.main(mode);
     const mac = await loader.chip.readMac(loader);

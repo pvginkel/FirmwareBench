@@ -4,7 +4,7 @@
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FlashImage, Job } from '../../src/shared/protocol.ts';
-import { fakeEsptool, imageFetch, started as start, tick, until, type FakeEsptool, type Started } from './fakes.ts';
+import { BRIDGE_INFO, fakeEsptool, imageFetch, started as start, tick, until, type FakeEsptool, type Started } from './fakes.ts';
 
 let h: Started;
 
@@ -102,36 +102,16 @@ describe('a flash', () => {
     expect(h.server.logText().endsWith('Hello world!\r\nlater\n')).toBe(true);
   });
 
-  it('logs only what the chip sends after the reset pulse, not a boot still on its way when the pulse began', async () => {
-    // On the board, the reopen at the monitor's rate before the pulse starts a boot of its
-    // own. Its lines are queued in the port's stream when the read loop starts, and more come
-    // while RTS is held
-    const stale = [
-      'ESP-ROM:esp32s3-20210327\r\n',
-      '        Usage          Type ST Offset   Length\r\n',
-      'I (59) boot:  0 nvs              WiFi data        01 02 00009000 00006000\r\n',
-      'I (109) esp_image: segment 3: paddr=00020020 vaddr=42000020 size=0f4b0h ( 62640) map\r\n',
-    ];
-    const boot = ['ESP-ROM:esp32s3-20210327\r\n', 'rst:0x15 (USB_UART_CHIP_RESET),boot:0x8 (SPI_FAST_FLASH_BOOT)\r\n', 'Hello world!\r\n'];
-    const open = h.port.open.bind(h.port);
-    h.port.open = async (options) => {
-      await open(options);
-      if (esptool.writes.length === 0 || options.baudRate !== 115200) return;
-      h.port.push(stale[0]!);
-      setTimeout(() => h.port.push(stale[1]!), 40);
-      setTimeout(() => h.port.push(stale[2]!), 60);
-      setTimeout(() => h.port.push(stale[3]!), 110);
-    };
-    h.port.onReset = () => {
-      h.port.push(boot[0]!);
-      setTimeout(() => h.port.push(boot[1]!), 1);
-      setTimeout(() => h.port.push(boot[2]!), 400);
-    };
-    await run('j1', flashJob('j1'));
-    await tick(500);
+  it('stays at 115200 on the chip\'s own USB: esptool-js never closes and reopens the port', async () => {
+    const opens = h.port.opens;
 
-    expect(h.server.logText()).toBe(boot.join(''));
-    expect(new TextDecoder().decode(esptool.released[0])).toBe(boot[0]);
+    expect(await run('j1', flashJob('j1'))).toMatchObject({ ok: true });
+
+    expect(esptool.writeBauds).toEqual([115200]);
+    // esptool-js's one open, after the monitor closed the port for it
+    expect(h.port.opens - opens).toBe(1);
+    expect(h.port.baudRate).toBe(115200);
+    expect(h.port.rtsPulses()).toEqual([100]);
   });
 
   it('writes nothing to another chip, and puts it back into its firmware', async () => {
@@ -197,6 +177,63 @@ describe('a flash', () => {
       { jobId: 'j1', ok: true },
     ]);
   });
+});
+
+describe('a flash behind a UART bridge', () => {
+  let esptool: FakeEsptool;
+
+  beforeEach(async () => {
+    esptool = fakeEsptool();
+    h = await start({ connectEsptool: esptool.connect, fetch: served('j1'), info: BRIDGE_INFO });
+  });
+
+  it('writes at 460800, and resets and reads the first boot at 115200', async () => {
+    const opens = h.port.opens;
+    h.port.onReset = () => h.port.push('rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)\r\n');
+
+    expect(await run('j1', flashJob('j1'))).toMatchObject({ ok: true });
+    await tick(5);
+
+    expect(esptool.writeBauds).toEqual([460800]);
+    // esptool-js's open, its reopen at 460800, and the reopen at 115200 before the reset
+    expect(h.port.opens - opens).toBe(3);
+    expect(h.port.baudRate).toBe(115200);
+    expect(h.port.rtsPulses()).toEqual([100]);
+    expect(h.server.logText()).toBe('rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)\r\n');
+  });
+
+  it('logs only what the chip sends after the reset pulse, not a boot still on its way when the pulse began', async () => {
+    // As on the S3 when it still changed baud: the reopen at the monitor's rate before the
+    // pulse starts a boot of its own. Its lines are queued in the port's stream when the read
+    // loop starts, and more come while RTS is held
+    const stale = [
+      'ESP-ROM:esp32s3-20210327\r\n',
+      '        Usage          Type ST Offset   Length\r\n',
+      'I (59) boot:  0 nvs              WiFi data        01 02 00009000 00006000\r\n',
+      'I (109) esp_image: segment 3: paddr=00020020 vaddr=42000020 size=0f4b0h ( 62640) map\r\n',
+    ];
+    const boot = ['ESP-ROM:esp32s3-20210327\r\n', 'rst:0x15 (USB_UART_CHIP_RESET),boot:0x8 (SPI_FAST_FLASH_BOOT)\r\n', 'Hello world!\r\n'];
+    const open = h.port.open.bind(h.port);
+    h.port.open = async (options) => {
+      await open(options);
+      if (esptool.writes.length === 0 || options.baudRate !== 115200) return;
+      h.port.push(stale[0]!);
+      setTimeout(() => h.port.push(stale[1]!), 40);
+      setTimeout(() => h.port.push(stale[2]!), 60);
+      setTimeout(() => h.port.push(stale[3]!), 110);
+    };
+    h.port.onReset = () => {
+      h.port.push(boot[0]!);
+      setTimeout(() => h.port.push(boot[1]!), 1);
+      setTimeout(() => h.port.push(boot[2]!), 400);
+    };
+    await run('j1', flashJob('j1'));
+    await tick(500);
+
+    expect(h.server.logText()).toBe(boot.join(''));
+    expect(new TextDecoder().decode(esptool.released[0])).toBe(boot[0]);
+  });
+
 });
 
 describe('a reset and a console line', () => {
