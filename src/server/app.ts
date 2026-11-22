@@ -63,6 +63,7 @@ export async function startBench(opts: BenchOptions): Promise<Bench> {
   );
   const pageHost = opts.pageHost ?? DEFAULTS.pageHost;
 
+  let started = false;
   let closing: Promise<void> | null = null;
   const close = () => {
     closing ??= (async () => {
@@ -75,7 +76,7 @@ export async function startBench(opts: BenchOptions): Promise<Bench> {
       page.server.closeAllConnections();
       api.closeAllConnections();
       await done;
-      log.marker('bench stopped');
+      if (started) log.marker('bench stopped');
       log.close();
     })();
     return closing;
@@ -85,6 +86,7 @@ export async function startBench(opts: BenchOptions): Promise<Bench> {
     const pagePort = await listen(page.server, opts.pagePort ?? DEFAULTS.pagePort, pageHost);
     const apiPort = await listen(api, opts.apiPort ?? DEFAULTS.apiPort, API_HOST);
     log.marker(`bench started: page on ${pageHost}:${pagePort}, agent API on ${API_HOST}:${apiPort}`);
+    started = true;
     return { pagePort, pageHost, apiPort, apiHost: API_HOST, log, hub, close };
   } catch (e) {
     await close();
